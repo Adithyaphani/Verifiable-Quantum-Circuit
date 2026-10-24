@@ -1,0 +1,3 @@
+# Fxpmath Arbitrary-Precision Fixed-Point Arithmetic
+fxpmath==0.4.10
+numpy>=1.20
