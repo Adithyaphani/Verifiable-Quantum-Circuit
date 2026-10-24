@@ -1,0 +1,6 @@
+# Google Quantum AI: Qualtran
+qualtran==0.7.0
+attrs>=23.2.0
+cachetools>=5.3
+bartiq==0.12.1
+qref==0.11.0
