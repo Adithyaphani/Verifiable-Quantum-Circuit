@@ -1,0 +1,6 @@
+# Quimb and Cotengra Tensor Network Compilers
+quimb==1.11.2
+cotengra==0.8.3
+autoray==0.8.11
+scipy>=1.10
+numpy>=1.20
