@@ -1,0 +1,4 @@
+# Galois Finite-Field Arithmetic
+galois==0.4.11
+numba>=0.55
+numpy>=1.22
