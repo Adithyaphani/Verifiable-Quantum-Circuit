@@ -1,0 +1,11 @@
+# Google Quantum AI: Verifiable Quantum Circuit Compilation
+# Consolidated Requirements Specification
+
+-r requirements/qualtran.txt
+-r requirements/cirq.txt
+-r requirements/pyzx.txt
+-r requirements/galois.txt
+-r requirements/fxpmath.txt
+-r requirements/quimb.txt
+-r requirements/scientific.txt
+-r requirements/telemetry.txt
