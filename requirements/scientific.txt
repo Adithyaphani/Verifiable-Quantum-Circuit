@@ -1,0 +1,6 @@
+# Scientific, Symbolic Algebra & Graph Routing
+numpy==2.2.6
+scipy==1.15.3
+sympy==1.14.0
+networkx==3.4.2
+rustworkx==0.18.1
