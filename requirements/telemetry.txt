@@ -1,0 +1,7 @@
+# Telemetry, Dashboard, and Validation Schemas
+matplotlib==3.10.9
+plotly==7.1.0
+dash==4.4.1
+pydantic==2.14.1
+ipython==8.39.0
+jupyterlab>=4.0
