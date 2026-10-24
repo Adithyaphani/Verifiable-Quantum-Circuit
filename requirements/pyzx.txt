@@ -1,0 +1,2 @@
+# PyZX: ZX-Calculus Quantum Circuit Compiler
+pyzx==0.10.7
