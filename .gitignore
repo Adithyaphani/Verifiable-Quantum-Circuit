@@ -50,3 +50,8 @@ Thumbs.db
 # Telemetry logs & temp data
 *.log
 /tmp/
+
+# Kaggle credentials & local sync
+.kaggle/
+kaggle.json
+

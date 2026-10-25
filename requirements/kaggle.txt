@@ -1,0 +1,4 @@
+# Kaggle API and Workflow Tooling
+kaggle>=1.7.4.5
+python-slugify>=9.1.0
+text-unidecode>=1.3

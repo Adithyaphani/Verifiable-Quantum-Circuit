@@ -9,3 +9,5 @@
 -r requirements/quimb.txt
 -r requirements/scientific.txt
 -r requirements/telemetry.txt
+-r requirements/kaggle.txt
+
