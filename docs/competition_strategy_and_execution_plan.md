@@ -1,3 +1,5 @@
+> **Status:** the invsqrt/DQI/chemistry generators in this repo are placeholders. They do not yet compute the required functions and would fail verification. Earlier 'verified' claims are unsupported.
+
 # Google Quantum AI: Competition Analysis, Technical Strategy & Execution Plan
 
 This document details the technical analysis of the **Google Quantum AI - Verifiable Quantum Circuit Compilation** Kaggle competition, the algorithmic foundations of each benchmark, the submission architecture, and our end-to-end execution roadmap.
@@ -7,7 +9,7 @@ This document details the technical analysis of the **Google Quantum AI - Verifi
 ## 1. Executive Summary & Strategic Positioning
 
 * **Competition**: [Google Quantum AI - Verifiable Quantum Circuit Compilation](https://www.kaggle.com/competitions/google-verifiable-quantum-circuit-compilation)
-* **Prize Pool**: $150,000 (Leaderboard prizes, Mid-Competition Milestone Prize on Nov 20, 2026, and Longest Leader Prize on Jan 4, 2027)
+* **Prize Pool**: $150,000 (Leaderboard prizes, Mid-Competition Milestone Prize ($10,000 per Kaggle; confirm) on Nov 20, 2026, and Longest Leader Prize on Jan 4, 2027)
 * **Timeline**: October 22, 2026 – January 20, 2027
 * **Core Paradigm**: Closed-loop agentic optimization of fault-tolerant quantum circuits using classical verification (Kickmix).
 
@@ -24,9 +26,7 @@ Success depends on:
 
 ## 2. Deep-Dive: The Three Scientific Benchmarks
 
-Submissions are evaluated using the **geometric mean of improvements relative to Google's baseline**:
-
-$$\text{Score} = \left( \frac{\text{Cost}_{\text{baseline, I}}}{\text{Cost}_{\text{submitted, I}}} \times \frac{\text{Cost}_{\text{baseline, II}}}{\text{Cost}_{\text{submitted, II}}} \times \frac{\text{Cost}_{\text{baseline, III}}}{\text{Cost}_{\text{submitted, III}}} \right)^{1/3}$$
+Per the paper (arXiv:2610.23832v2) each benchmark has its own score S (lower is better). The paper defines no combined geometric-mean score; check the Kaggle Evaluation tab for how the leaderboard combines them.
 
 ```
                                   EVALUATION ENGINE
@@ -35,7 +35,7 @@ $$\text{Score} = \left( \frac{\text{Cost}_{\text{baseline, I}}}{\text{Cost}_{\te
             ▼                             ▼                             ▼
     [Benchmark I: Fusion]        [Benchmark II: DQI]       [Benchmark III: Chemistry]
      Fixed-point 1/√x Phasing     Reed-Solomon Decoders      FeMoCo Block Encodings
-     Cost = Q² × T                Cost = R(ε⁺) × Q × T       Cost = λ_eff × Q_tot × T_tot
+     S = Q × C  (C = Toffolis + T/4; Z_POW costs 0.56·log2(1/ε)+5.3 T each)                S = R(ε⁺) × Q² × T,  R = ln2 / −ln(1/2 + 2√ε⁺)       Cost = λ_eff × Q_tot × T_tot
 ```
 
 ---
@@ -44,11 +44,11 @@ $$\text{Score} = \left( \frac{\text{Cost}_{\text{baseline, I}}}{\text{Cost}_{\te
 
 * **Physical Context**: Modeling alpha-particle stopping power in warm dense plasmas for inertial confinement fusion (PNAS 2024). Requires applying diagonal phase angles proportional to the Coulomb interaction potential $V(r) \propto 1/r = 1/\sqrt{x}$, where $x = \Delta x^2 + \Delta y^2 + \Delta z^2$.
 * **Cost Metric**: 
-  $$\text{Cost} = Q^2 \times T$$
+  $$S = Q \times C,\quad C = \text{Toffolis} + T/4$$
   * $Q$: Physical qubit count per shot.
   * $T$: Toffoli gate count per shot.
 * **Key Optimization Insights**:
-  * **Quadratic Qubit Penalty ($Q^2$)**: Qubit footprint is penalized quadratically. Reducing $Q$ by 50% yields a **4x improvement** in the benchmark score.
+  * **Qubit penalty**: Benchmark I is linear in Q (S = Q × C); the Q² term belongs to Benchmark II. Official reference: Q=260, 7,735 Toffolis, S≈2.08×10⁶ in the benchmark score.
   * **Ancilla Recycling (Pebble Game)**: Intermediate scratch registers must be immediately uncomputed and reused in-place rather than allocating fresh ancillae.
   * **Approximation Bounds**: The phase does not require exact floating-point division. Fixed-point polynomial approximations (Chebyshev economization or 1–2 Goldschmidt iterations) can achieve the required physical stopping-power accuracy with dramatically fewer Toffoli gates.
 
@@ -58,7 +58,7 @@ $$\text{Score} = \left( \frac{\text{Cost}_{\text{baseline, I}}}{\text{Cost}_{\te
 
 * **Physical Context**: Solving the Optimal Polynomial Intersection problem over finite fields using Decoded Quantum Interferometry (Nature 2025, arXiv:2510.10967). The bottleneck subroutine is a reversible Reed-Solomon syndrome decoder.
 * **Cost Metric**:
-  $$\text{Cost} = R(\epsilon^+) \times Q \times T$$
+  $$S = R(\epsilon^+)\, Q^2\, T,\quad R=\frac{\ln 2}{-\ln(1/2+2\sqrt{\epsilon^+})}$$
   * $\epsilon^+$: Upper confidence bound on decoder failure rate.
   * $R(\epsilon^+)$: Repetition factor compensating for decoder failures.
   * $Q$: Qubit count; $T$: Toffoli count per shot.
@@ -77,7 +77,7 @@ $$\text{Score} = \left( \frac{\text{Cost}_{\text{baseline, I}}}{\text{Cost}_{\te
   * **Hard Constraint**: Any submitted ANGLE circuit wider than **128 qubits is rejected**.
 * **Key Optimization Insights**:
   * **Classical/Quantum Co-Optimization**: Competitors submit both classical factorizations (`submission.npz`) and quantum Givens trees (`angle_k_*.kmb`/`.kmx`).
-  * **Tensor Rank Truncation**: Truncating small eigenvalues in the Double Factorization (DF-THC) tensor tensors $U, W$ directly reduces the number of Givens rotation circuits $n$ without exceeding chemical accuracy ($1.6 \times 10^{-3} \text{ Ha}$).
+  * **Tensor Rank Truncation**: Truncating small eigenvalues in the Double Factorization (DF-THC) tensor tensors $U, W$ directly reduces the number of Givens rotation circuits $n$ without exceeding chemical accuracy (the paper's 0.020 Ha residual limits).
   * **QROM Table Lookups**: Packing rotation angles into unary iteration QROMs with dirty ancilla borrowing.
 
 ---
