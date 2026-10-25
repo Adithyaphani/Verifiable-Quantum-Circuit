@@ -53,9 +53,19 @@ Thumbs.db
 
 # Downloaded Kaggle kernel outputs
 data/kaggle_outputs/
+notebooks/data/
+**/kaggle_outputs/
 
 # Kaggle credentials & local sync
 .kaggle/
 kaggle.json
+.jupyter/
+
+# Competition Large Datasets & Binary Submissions (>100MB)
+sample_submission/
+*.kmb
+*.fcidump
+kickmix/
+/verifiable_circuit_compilation.pdf
 
 
