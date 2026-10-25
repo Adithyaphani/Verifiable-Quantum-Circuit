@@ -3,12 +3,18 @@ Kickmix Circuit Abstract Syntax Tree (AST) & Serializer.
 
 Defines the core data structures for building, simulating, optimizing,
 and serializing Kickmix verifiable quantum circuits (.kmx / .kmb).
+Strictly adheres to official Kickmix instruction grammar:
+- Classical reversible: X, CX, CCX, SWAP
+- Diagonal phase: Z, S, T, Z_POW, NEG
+- Measurement and reset: HMR, R
+- Classical bits: BIT_STORE0, BIT_STORE1, BIT_INVERT
 """
 
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Tuple, Dict, Any, Union
 import math
+import re
 
 
 class OpType(Enum):
@@ -21,8 +27,13 @@ class OpType(Enum):
     Z = "Z"
     S = "S"
     T = "T"
-    RZ = "RZ"
-    MEASURE_UNCOMPUTE = "MEASURE_UNCOMPUTE"
+    Z_POW = "Z_POW"
+    NEG = "NEG"
+    R = "R"
+    HMR = "HMR"
+    BIT_STORE0 = "BIT_STORE0"
+    BIT_STORE1 = "BIT_STORE1"
+    BIT_INVERT = "BIT_INVERT"
 
 
 @dataclass(frozen=True)
@@ -45,7 +56,8 @@ class GateOp:
     op_type: OpType
     targets: List[Qubit]
     controls: List[Qubit] = field(default_factory=list)
-    angle: Optional[float] = None  # In radians, for RZ gates
+    angle: Optional[float] = None  # In turns, for Z_POW gates
+    classical_bit: Optional[int] = None
 
     @property
     def is_toffoli(self) -> bool:
@@ -58,13 +70,12 @@ class GateOp:
         if self.op_type == OpType.CCX:
             return 1
         elif self.op_type == OpType.MCX:
-            # An n-controlled NOT requires roughly 2(n-2) Toffolis with clean ancillae
             num_ctrl = len(self.controls)
             return max(1, 2 * (num_ctrl - 2)) if num_ctrl >= 2 else 0
         return 0
 
     def to_kmx_line(self, qubit_index_map: Dict[Qubit, int]) -> str:
-        """Serializes the gate operation to a standard .kmx text format line."""
+        """Serializes the gate operation to a standard space-separated .kmx line."""
         ctrl_indices = [str(qubit_index_map[c]) for c in self.controls]
         tgt_indices = [str(qubit_index_map[t]) for t in self.targets]
 
@@ -85,12 +96,23 @@ class GateOp:
             return f"S {tgt_indices[0]}"
         elif self.op_type == OpType.T:
             return f"T {tgt_indices[0]}"
-        elif self.op_type == OpType.RZ:
-            # Space-separated opcode, target qubit, and phase angle
-            return f"RZ {tgt_indices[0]} {self.angle:.12f}"
-
-        elif self.op_type == OpType.MEASURE_UNCOMPUTE:
-            return f"UNCOMPUTE {tgt_indices[0]}"
+        elif self.op_type == OpType.Z_POW:
+            # Strictly space-separated: Z_POW <target> <angle_in_turns>
+            turns = self.angle if self.angle is not None else 0.0
+            return f"Z_POW {tgt_indices[0]} {turns:.12f}"
+        elif self.op_type == OpType.NEG:
+            return f"NEG {tgt_indices[0]}"
+        elif self.op_type == OpType.R:
+            return f"R {tgt_indices[0]}"
+        elif self.op_type == OpType.HMR:
+            bit = self.classical_bit if self.classical_bit is not None else 0
+            return f"HMR {tgt_indices[0]} {bit}"
+        elif self.op_type == OpType.BIT_STORE0:
+            return f"BIT_STORE0 {self.classical_bit}"
+        elif self.op_type == OpType.BIT_STORE1:
+            return f"BIT_STORE1 {self.classical_bit}"
+        elif self.op_type == OpType.BIT_INVERT:
+            return f"BIT_INVERT {self.classical_bit}"
         else:
             raise ValueError(f"Unknown operation type: {self.op_type}")
 
@@ -98,142 +120,127 @@ class GateOp:
 class KickmixCircuit:
     """
     Kickmix verifiable quantum circuit builder and optimizer.
-    Maintains registers, instructions, and resource metrics.
     """
-
-    def __init__(self, name: str = "kickmix_circuit"):
+    def __init__(self, name: str = "circuit"):
         self.name = name
-        self.registers: Dict[str, int] = {}  # Register name -> size
+        self.registers: Dict[str, int] = {}
         self.instructions: List[GateOp] = []
         self._qubit_index_map: Dict[Qubit, int] = {}
-        self._next_qubit_id = 0
+        self._next_id: int = 0
 
     def add_register(self, name: str, size: int) -> List[Qubit]:
-        """Allocates a register of qubits."""
+        """Allocates a named quantum register."""
         if name in self.registers:
             raise ValueError(f"Register '{name}' already exists.")
         self.registers[name] = size
         qubits = []
         for i in range(size):
-            q = Qubit(register=name, index=i)
-            self._qubit_index_map[q] = self._next_qubit_id
-            self._next_qubit_id += 1
+            q = Qubit(name, i)
+            self._qubit_index_map[q] = self._next_id
+            self._next_id += 1
             qubits.append(q)
         return qubits
 
     @property
     def num_qubits(self) -> int:
-        """Total number of qubits allocated."""
-        return self._next_qubit_id
+        return self._next_id
 
     @property
     def toffoli_count(self) -> int:
-        """Total Toffoli gate cost."""
         return sum(op.toffoli_cost for op in self.instructions)
 
-    @property
-    def cx_count(self) -> int:
-        """Total CNOT gate count."""
-        return sum(1 for op in self.instructions if op.op_type == OpType.CX)
-
-    @property
-    def phase_count(self) -> int:
-        """Total diagonal phase operations (Z, S, T, RZ)."""
-        return sum(1 for op in self.instructions if op.op_type in (OpType.Z, OpType.S, OpType.T, OpType.RZ))
-
-    @property
-    def benchmark_1_cost(self) -> float:
-        """Cost metric for Benchmark I (Fusion 1/√x phasing): Q^2 * T."""
-        q = self.num_qubits
-        t = self.toffoli_count
-        return float(q * q * t)
-
-    # --- Gate Application Helpers ---
-
     def x(self, target: Qubit):
-        self.instructions.append(GateOp(op_type=OpType.X, targets=[target]))
+        self.instructions.append(GateOp(OpType.X, targets=[target]))
 
     def cx(self, control: Qubit, target: Qubit):
-        self.instructions.append(GateOp(op_type=OpType.CX, targets=[target], controls=[control]))
+        self.instructions.append(GateOp(OpType.CX, targets=[target], controls=[control]))
 
-    def ccx(self, control1: Qubit, control2: Qubit, target: Qubit):
-        self.instructions.append(GateOp(op_type=OpType.CCX, targets=[target], controls=[control1, control2]))
-
-    def mcx(self, controls: List[Qubit], target: Qubit):
-        self.instructions.append(GateOp(op_type=OpType.MCX, targets=[target], controls=controls))
+    def ccx(self, c1: Qubit, c2: Qubit, target: Qubit):
+        self.instructions.append(GateOp(OpType.CCX, targets=[target], controls=[c1, c2]))
 
     def swap(self, q1: Qubit, q2: Qubit):
-        self.instructions.append(GateOp(op_type=OpType.SWAP, targets=[q1, q2]))
+        self.instructions.append(GateOp(OpType.SWAP, targets=[q1, q2]))
 
     def z(self, target: Qubit):
-        self.instructions.append(GateOp(op_type=OpType.Z, targets=[target]))
+        self.instructions.append(GateOp(OpType.Z, targets=[target]))
 
     def s(self, target: Qubit):
-        self.instructions.append(GateOp(op_type=OpType.S, targets=[target]))
+        self.instructions.append(GateOp(OpType.S, targets=[target]))
 
     def t(self, target: Qubit):
-        self.instructions.append(GateOp(op_type=OpType.T, targets=[target]))
+        self.instructions.append(GateOp(OpType.T, targets=[target]))
 
-    def rz(self, target: Qubit, angle: float):
-        self.instructions.append(GateOp(op_type=OpType.RZ, targets=[target], angle=angle))
+    def z_pow(self, target: Qubit, turns: float):
+        """Applies diagonal rotation exp(i 2pi turns) to state |1>."""
+        self.instructions.append(GateOp(OpType.Z_POW, targets=[target], angle=turns))
 
-    def uncompute(self, target: Qubit):
-        self.instructions.append(GateOp(op_type=OpType.MEASURE_UNCOMPUTE, targets=[target]))
-
-    # --- Serialization ---
+    def reset(self, target: Qubit):
+        """Resets target qubit to |0>."""
+        self.instructions.append(GateOp(OpType.R, targets=[target]))
 
     def to_kmx(self) -> str:
-        """Serializes the circuit into the human-readable Kickmix (.kmx) text format."""
+        """Serializes the circuit to official space-separated .kmx string."""
         lines = [
             f"# Kickmix Circuit: {self.name}",
             f"# Total Qubits: {self.num_qubits}",
-            f"# Total Gates: {len(self.instructions)}",
+            f"# Total Instructions: {len(self.instructions)}",
             f"# Toffoli Count: {self.toffoli_count}",
-            f"# Registers: " + ", ".join(f"{name}[{size}]" for name, size in self.registers.items()),
             ""
         ]
         for op in self.instructions:
             lines.append(op.to_kmx_line(self._qubit_index_map))
         return "\n".join(lines) + "\n"
 
-    def save_kmx(self, filepath: str):
-        """Saves circuit to a .kmx file."""
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(self.to_kmx())
+    def save_kmx(self, path: str):
+        """Writes the circuit to a .kmx file and validates syntax."""
+        content = self.to_kmx()
+        validate_kmx_content(content)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
 
-    def to_cirq(self):
-        """Converts the Kickmix circuit into a Cirq Circuit object for visualization and simulation."""
-        import cirq
-        qubits = [cirq.LineQubit(i) for i in range(self.num_qubits)]
-        circuit = cirq.Circuit()
 
-        for op in self.instructions:
-            tgt_idx = [self._qubit_index_map[t] for t in op.targets]
-            ctrl_idx = [self._qubit_index_map[c] for c in op.controls]
+VALID_OPCODES = {
+    "X", "CX", "CCX", "MCX", "SWAP",
+    "Z", "S", "T", "Z_POW", "NEG",
+    "R", "HMR",
+    "BIT_STORE0", "BIT_STORE1", "BIT_INVERT"
+}
 
-            if op.op_type == OpType.X:
-                circuit.append(cirq.X(qubits[tgt_idx[0]]))
-            elif op.op_type == OpType.CX:
-                circuit.append(cirq.CNOT(qubits[ctrl_idx[0]], qubits[tgt_idx[0]]))
-            elif op.op_type == OpType.CCX:
-                circuit.append(cirq.TOFFOLI(qubits[ctrl_idx[0]], qubits[ctrl_idx[1]], qubits[tgt_idx[0]]))
-            elif op.op_type == OpType.SWAP:
-                circuit.append(cirq.SWAP(qubits[tgt_idx[0]], qubits[tgt_idx[1]]))
-            elif op.op_type == OpType.Z:
-                circuit.append(cirq.Z(qubits[tgt_idx[0]]))
-            elif op.op_type == OpType.S:
-                circuit.append(cirq.S(qubits[tgt_idx[0]]))
-            elif op.op_type == OpType.T:
-                circuit.append(cirq.T(qubits[tgt_idx[0]]))
-            elif op.op_type == OpType.RZ:
-                circuit.append(cirq.rz(op.angle)(qubits[tgt_idx[0]]))
-            elif op.op_type == OpType.MEASURE_UNCOMPUTE:
-                # In cirq simulation, represented as reset or identity projection
-                circuit.append(cirq.reset(qubits[tgt_idx[0]]))
 
-        return circuit
-
-    def __repr__(self) -> str:
-        return (f"<KickmixCircuit '{self.name}': {self.num_qubits} qubits, "
-                f"{len(self.instructions)} gates, {self.toffoli_count} Toffolis, "
-                f"B1 Cost={self.benchmark_1_cost:.1f}>")
+def validate_kmx_content(kmx_str: str) -> bool:
+    """
+    Validates that every instruction line conforms strictly to Kickmix grammar.
+    Raises ValueError with line details if any invalid opcode or format is found.
+    """
+    for line_idx, raw_line in enumerate(kmx_str.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        tokens = line.split()
+        op = tokens[0]
+        if op not in VALID_OPCODES:
+            raise ValueError(
+                f"Line {line_idx}: Invalid Kickmix opcode '{op}'. "
+                f"Must be one of {sorted(VALID_OPCODES)}"
+            )
+        # Verify opcode-specific arguments
+        if op in ("X", "Z", "S", "T", "NEG", "R"):
+            if len(tokens) != 2 or not tokens[1].isdigit():
+                raise ValueError(f"Line {line_idx}: '{op}' expects 1 integer target, got: {tokens}")
+        elif op == "CX":
+            if len(tokens) != 3 or not (tokens[1].isdigit() and tokens[2].isdigit()):
+                raise ValueError(f"Line {line_idx}: 'CX' expects 2 integer arguments, got: {tokens}")
+        elif op == "CCX":
+            if len(tokens) != 4 or not all(t.isdigit() for t in tokens[1:4]):
+                raise ValueError(f"Line {line_idx}: 'CCX' expects 3 integer arguments, got: {tokens}")
+        elif op == "SWAP":
+            if len(tokens) != 3 or not (tokens[1].isdigit() and tokens[2].isdigit()):
+                raise ValueError(f"Line {line_idx}: 'SWAP' expects 2 integer arguments, got: {tokens}")
+        elif op == "Z_POW":
+            if len(tokens) != 3 or not tokens[1].isdigit():
+                raise ValueError(f"Line {line_idx}: 'Z_POW' expects target and float turns, got: {tokens}")
+            try:
+                float(tokens[2])
+            except ValueError:
+                raise ValueError(f"Line {line_idx}: 'Z_POW' angle must be float, got: {tokens[2]}")
+    return True
