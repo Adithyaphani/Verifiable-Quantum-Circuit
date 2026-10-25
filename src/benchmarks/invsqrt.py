@@ -1,8 +1,11 @@
 """
+WARNING: PLACEHOLDER. This circuit does NOT compute a 1/sqrt(x) phase and fails the verifier.
+See docs/competition_strategy_and_execution_plan.md for the correct reference design.
+
 Benchmark I: Fusion Energy (1/√x Phasing) Reversible Circuit Synthesizer.
 
 Synthesizes fixed-point inverse-square-root phasing circuits using reversible logic
-and diagonal phase gates, optimized for the space-time volume metric: Cost = Q^2 * T.
+and diagonal phase gates, optimized for the space-time volume metric: Score S = Q * C.
 
 Key Architecture:
 1. In-place CDKM (Cuccaro) Ripple-Carry Adder requiring only 1 carry ancilla.
