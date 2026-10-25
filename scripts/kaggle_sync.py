@@ -26,14 +26,13 @@ def get_access_token() -> str:
     if "KAGGLE_KEY" in os.environ and os.environ["KAGGLE_KEY"].startswith("KGAT_"):
         return os.environ["KAGGLE_KEY"].strip()
 
-    # 2. File locations
+    # 2. Project local credential directory only (strictly confined to project)
+    project_root = Path(__file__).resolve().parent.parent
     token_files = [
-        Path.home() / ".kaggle" / "access_token",
-        Path.home() / ".config" / "kaggle" / "access_token",
-        Path("/mnt/d/1-Projects/1-Verifiable-Quantum-Circuit/.kaggle/access_token"),
-        Path.home() / ".kaggle" / "kaggle.json",
-        Path("/mnt/d/1-Projects/1-Verifiable-Quantum-Circuit/.kaggle/kaggle.json")
+        project_root / ".kaggle" / "access_token",
+        project_root / ".kaggle" / "kaggle.json",
     ]
+
 
     for p in token_files:
         if p.exists():
