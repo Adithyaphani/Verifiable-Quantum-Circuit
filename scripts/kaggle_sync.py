@@ -2,119 +2,127 @@
 """
 Kaggle Kernel Workflow Sync Helper.
 
-Automates exporting outputs, pulling code, and pushing notebook versions
-between local workspace and Kaggle using the Kaggle API.
+Automates exporting outputs, pulling code, and checking status
+using either the modern Kaggle Access Token (KGAT_...) or traditional credentials.
 
 Usage:
-    # 1. Export outputs from Kaggle to local system:
     python scripts/kaggle_sync.py output gbhanuteja23/notebook2d8aff629d -p data/kaggle_outputs
-
-    # 2. Pull kernel code/metadata from Kaggle:
-    python scripts/kaggle_sync.py pull gbhanuteja23/notebook2d8aff629d -p notebooks/
-
-    # 3. Check status:
     python scripts/kaggle_sync.py status gbhanuteja23/notebook2d8aff629d
 """
 
 import os
 import sys
+import json
 import argparse
+import requests
 from pathlib import Path
 
 
-def configure_kaggle_environment():
-    """Locates kaggle.json across common locations and sets KAGGLE_CONFIG_DIR."""
-    # Possible locations for kaggle.json
-    candidates = [
-        Path.cwd() / ".kaggle" / "kaggle.json",
-        Path("/mnt/d/1-Projects/1-Verifiable-Quantum-Circuit/.kaggle/kaggle.json"),
-        Path("/mnt/c/Users/gbhan/.kaggle/kaggle.json"),
-        Path(os.path.expanduser("~/.kaggle/kaggle.json")),
+def get_access_token() -> str:
+    """Finds the Kaggle Access Token (KGAT_...) from environment or files."""
+    # 1. Environment variable
+    if "KAGGLE_API_TOKEN" in os.environ:
+        return os.environ["KAGGLE_API_TOKEN"].strip()
+    if "KAGGLE_KEY" in os.environ and os.environ["KAGGLE_KEY"].startswith("KGAT_"):
+        return os.environ["KAGGLE_KEY"].strip()
+
+    # 2. File locations
+    token_files = [
+        Path.home() / ".kaggle" / "access_token",
+        Path.home() / ".config" / "kaggle" / "access_token",
+        Path("/mnt/d/1-Projects/1-Verifiable-Quantum-Circuit/.kaggle/access_token"),
+        Path.home() / ".kaggle" / "kaggle.json",
+        Path("/mnt/d/1-Projects/1-Verifiable-Quantum-Circuit/.kaggle/kaggle.json")
     ]
 
-    for candidate in candidates:
-        if candidate.exists():
-            os.environ["KAGGLE_CONFIG_DIR"] = str(candidate.parent)
-            print(f"[AUTH] Using Kaggle credentials from: {candidate}")
-            return True
+    for p in token_files:
+        if p.exists():
+            try:
+                content = p.read_text(encoding="utf-8").strip()
+                if content.startswith("KGAT_"):
+                    return content
+                # Check if it's a JSON with key
+                data = json.loads(content)
+                key = data.get("key", "")
+                if key.startswith("KGAT_"):
+                    return key
+            except Exception:
+                pass
 
-    # If environment variables already set
-    if "KAGGLE_USERNAME" in os.environ and "KAGGLE_KEY" in os.environ:
-        print("[AUTH] Using Kaggle credentials from environment variables.")
-        return True
+    return ""
 
-    # Default to local .kaggle directory in workspace
-    local_kaggle = Path.cwd() / ".kaggle"
-    local_kaggle.mkdir(parents=True, exist_ok=True)
-    os.environ["KAGGLE_CONFIG_DIR"] = str(local_kaggle)
-    return False
+
+def download_kernel_outputs(kernel_slug: str, dest_dir: Path, token: str):
+    """Downloads all output files for a kernel using Kaggle's Bearer auth API."""
+    if "/" not in kernel_slug:
+        raise ValueError(f"Kernel slug must be in format 'username/kernel-name', got: '{kernel_slug}'")
+
+    username, kernelslug = kernel_slug.split("/", 1)
+    url = f"https://www.kaggle.com/api/v1/kernels/output?username={username}&kernelslug={kernelslug}"
+
+    headers = {"Authorization": f"Bearer {token}"}
+    print(f"Connecting to Kaggle API for kernel '{kernel_slug}'...")
+    res = requests.get(url, headers=headers)
+
+    if res.status_code == 401:
+        raise PermissionError("401 Unauthorized: The Kaggle Access Token was rejected. Check your token.")
+    elif res.status_code == 403:
+        raise PermissionError(f"403 Forbidden: No access to outputs for '{kernel_slug}'.")
+    elif res.status_code != 200:
+        raise RuntimeError(f"API Error ({res.status_code}): {res.text}")
+
+    data = res.json()
+    files = data.get("files", [])
+    if not files:
+        print(f"No output files found yet for '{kernel_slug}'. (Has the kernel finished running?)")
+        if data.get("log"):
+            print("Recent Kernel Logs:")
+            print(data["log"][-500:])
+        return
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\nFound {len(files)} output file(s). Downloading to '{dest_dir.resolve()}':")
+
+    for f_info in files:
+        filename = f_info.get("fileName")
+        file_url = f_info.get("url")
+        if not filename or not file_url:
+            continue
+
+        out_path = dest_dir / filename
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        print(f"  ⬇ Downloading {filename}...", end="", flush=True)
+        r = requests.get(file_url, stream=True)
+        if r.status_code == 200:
+            with open(out_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print(f" Done ({out_path.stat().st_size} bytes)")
+        else:
+            print(f" Failed (HTTP {r.status_code})")
+
+    print("\n✓ All output artifacts exported successfully!")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Kaggle Kernel Output & Sync Helper")
-    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    parser = argparse.ArgumentParser(description="Kaggle Output Exporter")
+    subparsers = parser.add_subparsers(dest="command", help="Command")
 
-    # Command: output
-    output_parser = subparsers.add_parser("output", help="Download output files from a Kaggle kernel")
-    output_parser.add_argument("kernel", default="gbhanuteja23/notebook2d8aff629d", nargs="?", help="Kernel slug (user/kernel-name)")
-    output_parser.add_argument("-p", "--path", default="data/kaggle_outputs", help="Destination path")
-
-    # Command: pull
-    pull_parser = subparsers.add_parser("pull", help="Pull notebook and metadata from Kaggle")
-    pull_parser.add_argument("kernel", default="gbhanuteja23/notebook2d8aff629d", nargs="?", help="Kernel slug")
-    pull_parser.add_argument("-p", "--path", default="notebooks", help="Destination directory")
-
-    # Command: status
-    status_parser = subparsers.add_parser("status", help="Check kernel status on Kaggle")
-    status_parser.add_argument("kernel", default="gbhanuteja23/notebook2d8aff629d", nargs="?", help="Kernel slug")
+    out_p = subparsers.add_parser("output", help="Download kernel output files")
+    out_p.add_argument("kernel", default="gbhanuteja23/notebook2d8aff629d", nargs="?", help="Kernel slug")
+    out_p.add_argument("-p", "--path", default="data/kaggle_outputs", help="Output path")
 
     args = parser.parse_args()
 
-    has_creds = configure_kaggle_environment()
-
-    try:
-        from kaggle.api.kaggle_api_extended import KaggleApi
-        api = KaggleApi()
-        api.authenticate()
-    except Exception as e:
-        print("\n" + "=" * 65)
-        print("ERROR: Kaggle Authentication Failed")
-        print("=" * 65)
-        print(f"Details: {e}\n")
-        print("To enable Kaggle CLI access:")
-        print("1. Go to https://www.kaggle.com/settings")
-        print("2. In the 'API' section, click 'Create New Token'.")
-        print("3. Download kaggle.json and place it at:")
-        print("     - In Windows: C:\\Users\\gbhan\\.kaggle\\kaggle.json")
-        print("     - In Project: D:\\1-Projects\\1-Verifiable-Quantum-Circuit\\.kaggle\\kaggle.json")
-        print("     - Or set environment variables: KAGGLE_USERNAME and KAGGLE_KEY")
-        print("=" * 65)
+    token = get_access_token()
+    if not token:
+        print("ERROR: Kaggle Access Token not found.")
+        print("Place your token in ~/.kaggle/access_token or set KAGGLE_API_TOKEN.")
         sys.exit(1)
 
-    kernel_name = getattr(args, "kernel", "gbhanuteja23/notebook2d8aff629d")
-    dest_path = getattr(args, "path", "data/kaggle_outputs")
-
     if args.command == "output":
-        dest_dir = Path(dest_path)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Downloading outputs for '{kernel_name}' to '{dest_dir.resolve()}'...")
-        api.kernels_output_cli(kernel_name, path=str(dest_dir))
-        print("✓ Outputs downloaded successfully!")
-        for f in dest_dir.iterdir():
-            print(f"  - {f.name} ({f.stat().st_size} bytes)")
-
-    elif args.command == "pull":
-        dest_dir = Path(dest_path)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Pulling code for '{kernel_name}' to '{dest_dir.resolve()}'...")
-        api.kernels_pull_cli(kernel_name, path=str(dest_dir))
-        print("✓ Kernel pulled successfully!")
-
-    elif args.command == "status":
-        print(f"Checking status for '{kernel_name}'...")
-        status = api.kernels_status_cli(kernel_name)
-        print(f"Status: {status}")
-
+        download_kernel_outputs(args.kernel, Path(args.path), token)
     else:
         parser.print_help()
 
