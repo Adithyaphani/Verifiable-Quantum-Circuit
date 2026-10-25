@@ -86,8 +86,9 @@ class GateOp:
         elif self.op_type == OpType.T:
             return f"T {tgt_indices[0]}"
         elif self.op_type == OpType.RZ:
-            # Angle in radians formatted with high precision
-            return f"RZ({self.angle:.12f}) {tgt_indices[0]}"
+            # Space-separated opcode, target qubit, and phase angle
+            return f"RZ {tgt_indices[0]} {self.angle:.12f}"
+
         elif self.op_type == OpType.MEASURE_UNCOMPUTE:
             return f"UNCOMPUTE {tgt_indices[0]}"
         else:
