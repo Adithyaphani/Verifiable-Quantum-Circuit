@@ -32,6 +32,7 @@ class KmxInstruction:
         self.qubits: List[str] = []
         self.angle: Optional[float] = None
         self.condition: Optional[str] = None
+        self.modified: bool = False
         self._parse()
 
     def _parse(self):
@@ -147,6 +148,8 @@ class KmxInstruction:
         return False
 
     def to_kmx(self) -> str:
+        if not self.modified:
+            return self.raw
         if self.is_meta or self.is_comment or self.op is None:
             return self.raw
 
@@ -156,7 +159,13 @@ class KmxInstruction:
             angle = (self.angle or 0.0) % 2.0
             if angle > 1.0:
                 angle -= 2.0
-            return f"Z_POW {self.qubits[0]} {angle:g}{cond_str}"
+            # Strict decimal format: [-+]?[0-9]+\.[0-9]+ without scientific notation
+            s = f"{angle:.50f}".rstrip("0")
+            if s.endswith("."):
+                s += "0"
+            if "." not in s:
+                s += ".0"
+            return f"Z_POW {self.qubits[0]} {s}{cond_str}"
 
         return f"{self.op} {' '.join(self.qubits)}{cond_str}"
 
@@ -209,6 +218,7 @@ def optimize_kmx_lines(lines: List[str], max_passes: int = 20) -> List[str]:
                         changed = True
                     else:
                         curr.angle = merged_angle
+                        curr.modified = True
                         instructions.pop(j)
                         changed = True
                     break
