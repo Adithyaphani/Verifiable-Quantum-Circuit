@@ -133,6 +133,7 @@ def build(p: Params = Params(), c0_shift=None) -> km.Circuit:
     x = b.create_quantum_register(NBITS, name="x")
     s = b.alloc_qubits(4)
 
+    b.info_tag("@stage:normalize")
     # 1. normalize ------------------------------------------------------------
     norm_log = []
     width = NBITS
@@ -141,6 +142,7 @@ def build(p: Params = Params(), c0_shift=None) -> km.Circuit:
         nz = NBITS - k                     # bits that can be non-zero when the flag is set
         norm_log.append((bit, k, _shift_left_known_zero(b, s[bit], x, k, nz)))
 
+    b.info_tag("@stage:lookup")
     # 2. coefficient lookup + Horner ----------------------------------------------------
     addr = x[NBITS - p.A:]
     t_bits = x[: NBITS - p.A]
@@ -153,8 +155,15 @@ def build(p: Params = Params(), c0_shift=None) -> km.Circuit:
             val |= int(ints[a][d]) << off
             off += widths[d]
         table.append(val)
-    b.init_lookup(table=table, address=addr, target=target)
+    # Only addresses with a top bit pair != 00 occur after normalisation: iterate just those
+    # (unary iteration over range(2**(A-2), 2**A) saves 2**(A-2) Toffolis vs init_lookup).
+    with b.unary_iteration(addr, range(1 << (p.A - 2), 1 << p.A)) as it:
+        for v, mq in it:
+            ones = [target[i] for i in range(len(target)) if (table[v] >> i) & 1]
+            if ones:
+                b.cx(mq, km.array(ones))
 
+    b.info_tag("@stage:horner")
     horner = []                                         # (k, product register, rows)
     for k in range(p.degree - 1, -1, -1):
         src = regs[k + 1]                               # holds B_{k+1}
@@ -163,6 +172,7 @@ def build(p: Params = Params(), c0_shift=None) -> km.Circuit:
         b.isub(prod, target=regs[k])                    # regs[k] becomes B_k (B_0 = p)
         horner.append((k, prod, rows))
 
+    b.info_tag("@stage:shift")
     # 3. phase ---------------------------------------------------------------------------
     pr = regs[0]                                        # p * 2**F, width F+1
     lo_bit = max(0, len(pr) - p.phase_bits)
@@ -176,25 +186,30 @@ def build(p: Params = Params(), c0_shift=None) -> km.Circuit:
         prior = max(sum(kk for bb, kk in stages[:n] if (sv >> bb) & 1)
                     for sv in range(11) if (sv >> bit) & 1)
         shift_log.append(_shift_left_known_zero(b, s[bit], win, k, nph + prior))
+    b.info_tag("@stage:rotations")
     for m in range(len(win)):
         e = 2 ** (lo_bit + m - p.F - 10)               # weight in turns
         if e >= 1 or e < 2.0 ** -p.min_weight:
             continue
         b.z_pow(win[m], 2 * e)                         # Z_POW exponent is in half turns
+    b.info_tag("@stage:unshift")
     # unshift: replay each stage's CSWAPs in reverse order
     for (bit, _), ops in zip(reversed(((0, 1), (1, 2), (2, 4), (3, 8))), reversed(shift_log)):
         for a, c in reversed(ops):
             b.cswap(s[bit], a, c)
     b.free(pad)
 
+    b.info_tag("@stage:unhorner")
     # 4. uncompute ----------------------------------------------------------------------
     for k, prod, rows in reversed(horner):
         b.iadd(prod, target=regs[k])
         _unmul_rows(b, rows, prod, +1)
         b.free(prod)
+    b.info_tag("@stage:unlookup")
     b.del_lookup(table=table, address=addr, target=target)
     for r in regs:
         b.free(r)
+    b.info_tag("@stage:unnormalize")
     for bit, k, ops in reversed(norm_log):
         for a, c in reversed(ops):
             b.cswap(s[bit], a, c)
