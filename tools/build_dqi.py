@@ -1,4 +1,4 @@
-"""Build the generic-schedule DQI decoder (Benchmark II) and optionally verify it.
+"""Build the window-EEA DQI decoder (Benchmark II) and optionally verify it.
 
     python tools/build_dqi.py dqi.kmb                # build (~30 s, ~500 MB file)
     python tools/build_dqi.py dqi.kmb --verify 2     # + official verifier, 2 workers (~4 min)
@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "verifiers"))
 
-from src.dqi.generic_eea2 import GenericEEADecoderLean  # noqa: E402
+from src.dqi.window_eea import WindowEEADecoder  # noqa: E402
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
@@ -21,7 +21,7 @@ if __name__ == "__main__":
     ap.add_argument("--verify", type=int, default=0, metavar="WORKERS")
     a = ap.parse_args()
     t = time.time()
-    c = GenericEEADecoderLean().build()
+    c = WindowEEADecoder().build()
     c.to_file(a.out, format="kmb")
     print(f"wrote {a.out}: Q={c.num_qubits} toffoli={c.operation_statistics().num_toffoli_like} ({time.time() - t:.0f}s)")
     if a.verify:
